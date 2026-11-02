@@ -25,10 +25,16 @@ def broadcast(text, subs):
 
 def get_titles():
     r = requests.get(URL, timeout=30, headers={"User-Agent": "Mozilla/5.0"})
+    print("KMAN:", r.status_code, len(r.text), "bytes")
     r.raise_for_status()
     text = BeautifulSoup(r.text, "html.parser").get_text("\n")
-    return {" ".join(l.split()) for l in text.split("\n")
-            if "попередні результати" in l.lower() and len(l.strip()) > 25}
+    titles = {" ".join(l.split()) for l in text.split("\n")
+              if "попередні результати" in l.lower() and len(l.strip()) > 25}
+    print("KMAN: знайдено записів:", len(titles))
+    if not titles:
+        print(r.text[:500])
+        raise RuntimeError("на сторінці не знайдено жодного запису")
+    return titles
 
 
 state = None
@@ -36,8 +42,8 @@ if os.path.exists(STATE_FILE):
     state = json.load(open(STATE_FILE, encoding="utf-8"))
     if isinstance(state, list):
         state = {"seen": state}
-first_run = state is None
 state = state or {}
+first_run = not state.get("initialized")
 seen = set(state.get("seen", []))
 subs = set(state.get("subs", []))
 offset = state.get("offset", 0)
@@ -46,10 +52,13 @@ if OWNER:
 
 # Нові підписники: усі, хто написав боту (наприклад, натиснув Start)
 try:
-    updates = requests.get(f"{API}/getUpdates",
-                           params={"offset": offset, "timeout": 0},
-                           timeout=30).json().get("result", [])
-except requests.RequestException:
+    resp = requests.get(f"{API}/getUpdates",
+                        params={"offset": offset, "timeout": 0}, timeout=30).json()
+    print("Telegram:", resp.get("ok"), resp.get("description", ""),
+          "оновлень:", len(resp.get("result", [])))
+    updates = resp.get("result", [])
+except requests.RequestException as e:
+    print("Telegram недоступний:", e)
     updates = []
 for u in updates:
     offset = u["update_id"] + 1
@@ -68,6 +77,7 @@ except Exception as e:
 if titles is not None:
     if first_run:
         seen = titles
+        state["initialized"] = True
         broadcast(f"Моніторинг КМАН запущено. Зараз на сторінці {len(titles)} записів.", subs)
     else:
         new = titles - seen
@@ -78,5 +88,7 @@ if titles is not None:
                 broadcast(f"Нові попередні результати: {t}\n{URL}", subs)
         seen |= new
 
-json.dump({"seen": sorted(seen), "subs": sorted(subs), "offset": offset},
+print("Підписників:", len(subs))
+json.dump({"initialized": state.get("initialized", False), "seen": sorted(seen),
+           "subs": sorted(subs), "offset": offset},
           open(STATE_FILE, "w", encoding="utf-8"), ensure_ascii=False, indent=1)
