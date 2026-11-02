@@ -1,5 +1,8 @@
 {
+ "initialized": false,
  "seen": [],
- "subs": [],
- "offset": 0
+ "subs": [
+  "807539461"
+ ],
+ "offset": 282530395
 }
