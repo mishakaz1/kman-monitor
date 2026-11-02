@@ -25,6 +25,7 @@ def broadcast(text, subs):
 
 def get_titles():
     r = requests.get(URL, timeout=30, headers={"User-Agent": "Mozilla/5.0"})
+    r.encoding = "utf-8"
     print("KMAN:", r.status_code, len(r.text), "bytes")
     r.raise_for_status()
     text = BeautifulSoup(r.text, "html.parser").get_text("\n")
