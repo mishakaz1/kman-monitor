@@ -1,9 +1,11 @@
 import os, json, requests
+from urllib.parse import urljoin, unquote
 from bs4 import BeautifulSoup
 
 TOKEN = os.environ["TG_TOKEN"]
 OWNER = os.environ.get("TG_CHAT_ID", "").strip()
-URL = "https://kman.kyiv.ua/ua/Poperedni-reziltati-2026-2027"
+URL_PRE = "https://kman.kyiv.ua/ua/Poperedni-reziltati-2026-2027"
+URL_FIN = "https://kman.kyiv.ua/ua/Rezultati-Olimpiad-2026-2027"
 STATE_FILE = "kman_seen.json"
 API = f"https://api.telegram.org/bot{TOKEN}"
 
@@ -23,19 +25,48 @@ def broadcast(text, subs):
             subs.discard(c)
 
 
-def get_titles():
-    r = requests.get(URL, timeout=30, headers={"User-Agent": "Mozilla/5.0"})
+def fetch(url):
+    r = requests.get(url, timeout=30, headers={"User-Agent": "Mozilla/5.0"})
     r.encoding = "utf-8"
-    print("KMAN:", r.status_code, len(r.text), "bytes")
+    print("KMAN:", url, r.status_code, len(r.text), "bytes")
     r.raise_for_status()
-    text = BeautifulSoup(r.text, "html.parser").get_text("\n")
+    return r.text
+
+
+def get_pre():
+    html = fetch(URL_PRE)
+    text = BeautifulSoup(html, "html.parser").get_text("\n")
     titles = {" ".join(l.split()) for l in text.split("\n")
               if "попередні результати" in l.lower() and len(l.strip()) > 25}
-    print("KMAN: знайдено записів:", len(titles))
+    print("Попередні: знайдено записів:", len(titles))
     if not titles:
-        print(r.text[:500])
-        raise RuntimeError("на сторінці не знайдено жодного запису")
+        print(html[:500])
+        raise RuntimeError("на сторінці попередніх не знайдено жодного запису")
     return titles
+
+
+def get_fin():
+    """Остаточні: кожен опублікований файл (/f/...) — окремий запис.
+    Повертає {повне посилання: назва}."""
+    html = fetch(URL_FIN)
+    soup = BeautifulSoup(html, "html.parser")
+    items = {}
+    for a in soup.find_all("a", href=True):
+        href = a["href"]
+        if not href.startswith("/f/") and "kman.kyiv.ua/f/" not in href:
+            continue
+        name = " ".join(a.get_text(" ").split()) or unquote(href.rsplit("/", 1)[-1])
+        items[urljoin(URL_FIN, href)] = name
+    print("Остаточні: знайдено файлів:", len(items))
+    if not items:
+        print(html[:500])
+        raise RuntimeError("на сторінці остаточних не знайдено жодного файлу")
+    return items
+
+
+def is_physics(*parts):
+    s = " ".join(unquote(p) for p in parts).lower()
+    return "фізик" in s
 
 
 state = None
@@ -44,8 +75,8 @@ if os.path.exists(STATE_FILE):
     if isinstance(state, list):
         state = {"seen": state}
 state = state or {}
-first_run = not state.get("initialized")
 seen = set(state.get("seen", []))
+seen_fin = set(state.get("seen_fin", []))
 subs = set(state.get("subs", []))
 offset = state.get("offset", 0)
 if OWNER:
@@ -67,29 +98,59 @@ for u in updates:
     cid = str(chat.get("id", ""))
     if cid and chat.get("type") == "private" and cid not in subs:
         subs.add(cid)
-        send(cid, "Підписано. Напишу, коли на КМАН з'являться нові попередні результати.")
+        send(cid, "Підписано. Напишу, коли на КМАН з'являться нові попередні "
+                  "або остаточні результати.")
 
+# --- Попередні результати ---
 try:
-    titles = get_titles()
+    titles = get_pre()
 except Exception as e:
-    print("Не вдалося прочитати сторінку:", e)
+    print("Не вдалося прочитати попередні:", e)
     titles = None
 
 if titles is not None:
-    if first_run:
+    if not state.get("initialized"):
         seen = titles
         state["initialized"] = True
-        broadcast(f"Моніторинг КМАН запущено. Зараз на сторінці {len(titles)} записів.", subs)
+        broadcast(f"Моніторинг КМАН запущено. Зараз на сторінці попередніх "
+                  f"{len(titles)} записів.", subs)
     else:
         new = titles - seen
         for t in sorted(new):
-            if "фізик" in t.lower():
-                broadcast(f"🔥 ФІЗИКА! {t}\n{URL}", subs)
+            if is_physics(t):
+                broadcast(f"🔥 ФІЗИКА (попередні)! {t}\n{URL_PRE}", subs)
             else:
-                broadcast(f"Нові попередні результати: {t}\n{URL}", subs)
+                broadcast(f"Нові попередні результати: {t}\n{URL_PRE}", subs)
         seen |= new
+
+# --- Остаточні результати ---
+try:
+    files = get_fin()
+except Exception as e:
+    print("Не вдалося прочитати остаточні:", e)
+    files = None
+
+if files is not None:
+    if not state.get("fin_initialized"):
+        seen_fin = set(files)
+        state["fin_initialized"] = True
+        broadcast(f"Тепер слідкую й за остаточними результатами. Зараз на "
+                  f"сторінці {len(files)} файлів, фізики ще немає."
+                  if not any(is_physics(u, n) for u, n in files.items()) else
+                  f"Тепер слідкую й за остаточними результатами. Зараз на "
+                  f"сторінці {len(files)} файлів.", subs)
+    else:
+        for link in sorted(set(files) - seen_fin):
+            name = files[link]
+            if is_physics(link, name):
+                broadcast(f"🔥🔥 ФІЗИКА — ОСТАТОЧНІ! {name}\n{link}", subs)
+            else:
+                broadcast(f"Нові остаточні результати: {name}\n{link}", subs)
+            seen_fin.add(link)
 
 print("Підписників:", len(subs))
 json.dump({"initialized": state.get("initialized", False), "seen": sorted(seen),
+           "fin_initialized": state.get("fin_initialized", False),
+           "seen_fin": sorted(seen_fin),
            "subs": sorted(subs), "offset": offset},
           open(STATE_FILE, "w", encoding="utf-8"), ensure_ascii=False, indent=1)
