@@ -28,6 +28,7 @@ jobs:
           git config user.email "kman-bot@users.noreply.github.com"
           end=$(( $(date +%s) + 345*60 ))
           while [ $(date +%s) -lt $end ]; do
+            git pull -q --rebase || echo "pull failed"
             python monitor.py || echo "monitor.py failed"
             git add kman_seen.json
             if ! git diff --cached --quiet; then
