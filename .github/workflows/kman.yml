@@ -1,26 +1,43 @@
 name: KMAN monitor
 on:
   schedule:
-    - cron: "*/15 * * * *"
+    - cron: "*/5 * * * *"   # страховка, якщо ланцюжок обірветься
   workflow_dispatch:
 permissions:
   contents: write
+  actions: write
+concurrency:
+  group: kman-monitor
+  cancel-in-progress: false
 jobs:
   check:
     runs-on: ubuntu-latest
+    timeout-minutes: 358
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
       - run: pip install requests beautifulsoup4
-      - run: python monitor.py
+      - name: Check every 30 s for ~5h45m
         env:
           TG_TOKEN: ${{ secrets.TG_TOKEN }}
           TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
-      - name: Save seen list
         run: |
           git config user.name "kman-bot"
           git config user.email "kman-bot@users.noreply.github.com"
-          git add kman_seen.json
-          git diff --cached --quiet || (git commit -m "update seen" && git push)
+          end=$(( $(date +%s) + 345*60 ))
+          while [ $(date +%s) -lt $end ]; do
+            python monitor.py || echo "monitor.py failed"
+            git add kman_seen.json
+            if ! git diff --cached --quiet; then
+              git commit -q -m "update seen"
+              git pull -q --rebase && git push -q || echo "push failed"
+            fi
+            sleep 30
+          done
+      - name: Start next run
+        if: ${{ !cancelled() }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh workflow run kman.yml --ref main -R ${{ github.repository }}
