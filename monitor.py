@@ -64,9 +64,21 @@ def get_fin():
     return items
 
 
+# Лише ці предмети (корені слів, щоб ловити «з фізики», «Фізика» тощо)
+SUBJECTS = ["біолог", "фізик", "хімі", "математик", "інформатик"]
+
+
+def norm(*parts):
+    return " ".join(unquote(p) for p in parts).lower()
+
+
 def is_physics(*parts):
-    s = " ".join(unquote(p) for p in parts).lower()
-    return "фізик" in s
+    return "фізик" in norm(*parts)
+
+
+def wanted(*parts):
+    s = norm(*parts)
+    return any(k in s for k in SUBJECTS)
 
 
 state = None
@@ -99,7 +111,8 @@ for u in updates:
     if cid and chat.get("type") == "private" and cid not in subs:
         subs.add(cid)
         send(cid, "Підписано. Напишу, коли на КМАН з'являться нові попередні "
-                  "або остаточні результати.")
+                  "або остаточні результати з біології, фізики, хімії, "
+                  "математики чи інформатики.")
 
 # --- Попередні результати ---
 try:
@@ -117,6 +130,8 @@ if titles is not None:
     else:
         new = titles - seen
         for t in sorted(new):
+            if not wanted(t):
+                continue
             if is_physics(t):
                 broadcast(f"🔥 ФІЗИКА (попередні)! {t}\n{URL_PRE}", subs)
             else:
@@ -142,11 +157,13 @@ if files is not None:
     else:
         for link in sorted(set(files) - seen_fin):
             name = files[link]
+            seen_fin.add(link)
+            if not wanted(link, name):
+                continue
             if is_physics(link, name):
                 broadcast(f"🔥🔥 ФІЗИКА — ОСТАТОЧНІ! {name}\n{link}", subs)
             else:
                 broadcast(f"Нові остаточні результати: {name}\n{link}", subs)
-            seen_fin.add(link)
 
 print("Підписників:", len(subs))
 json.dump({"initialized": state.get("initialized", False), "seen": sorted(seen),
